@@ -1,0 +1,103 @@
+management:
+  endpoint:
+    health:
+      show-details: always
+  endpoints:
+    web:
+      exposure:
+        include: health
+  health:
+    circuitbreakers:
+      enabled: true
+
+  # ------------------------------------------------------------------
+  # Mental model (how this configuration behaves in practice)
+  #
+  # - The Circuit Breaker uses a TIME_BASED sliding window of 30 seconds
+  # - Only calls made within the last 30 seconds are evaluated
+  # - The Circuit Breaker starts evaluating after at least 5 calls
+  # - If 50% or more of those calls fail, the circuit transitions to OPEN
+  # - While OPEN, all calls fail fast (no retries, no HTTP calls)
+  # - The circuit remains OPEN for 5 seconds
+  # - After that, it automatically transitions to HALF_OPEN
+  # - In HALF_OPEN, up to 3 test calls are allowed
+  #     - If all succeed → circuit goes back to CLOSED
+  #     - If any fail     → circuit goes back to OPEN
+  # ------------------------------------------------------------------
+
+resilience4j:
+  retry:
+    instances:
+      order-service:
+        # Maximum number of attempts per call (initial call + retries)
+        # max-attempts: 2 means:
+        #   - 1 initial execution
+        #   - 1 retry if a retryable exception occurs
+        max-attempts: 2
+
+        # Time to wait before retrying a failed attempt
+        wait-duration: 1s
+
+        # Enables exponential backoff between retry attempts
+        enable-exponential-backoff: true
+
+        # Multiplier applied to the wait duration after each retry
+        # Example with wait-duration=1s and multiplier=2:
+        #   First retry:  wait 1s
+        #   Second retry: wait 2s
+        exponential-backoff-multiplier: 2
+
+        # Maximum delay allowed between retries
+        exponential-max-wait-duration: 5s
+
+        # Retry ONLY for technical / transient failures
+        retry-exceptions:
+          - org.springframework.web.client.ResourceAccessException
+          - org.springframework.web.client.HttpServerErrorException
+          - java.net.ConnectException
+          - java.util.concurrent.TimeoutException
+
+        # Do NOT retry for programming or business errors
+        ignore-exceptions:
+          - java.lang.IllegalArgumentException
+
+  circuitbreaker:
+    instances:
+      order-service:
+        # Uses a TIME_BASED sliding window
+        # Failure rate is calculated based on calls made in the last 30 seconds
+        sliding-window-type: TIME_BASED
+
+        # The circuit opens if 50% or more of the calls fail
+        failure-rate-threshold: 50
+
+        # Minimum number of calls required before failure rate is evaluated
+        minimum-number-of-calls: 5
+
+        # Automatically transitions from OPEN to HALF_OPEN
+        automatic-transition-from-open-to-half-open-enabled: true
+
+        # Time the circuit remains OPEN before allowing test calls
+        wait-duration-in-open-state: 5s
+
+        # Number of test calls allowed while in HALF_OPEN state
+        permitted-number-of-calls-in-half-open-state: 3
+
+        # Sliding window size in seconds (TIME_BASED)
+        # Failures older than 30 seconds are discarded
+        sliding-window-size: 30
+
+        # Exposes Circuit Breaker status in /actuator/health
+        register-health-indicator: true
+
+        # Count ONLY technical failures as Circuit Breaker failures
+        record-exceptions:
+          - java.net.ConnectException
+          - java.util.concurrent.TimeoutException
+          - org.springframework.web.client.ResourceAccessException
+          - org.springframework.web.client.HttpServerErrorException
+
+        # Ignore business logic and client-side errors
+        ignore-exceptions:
+          - java.lang.IllegalArgumentException
+          - org.springframework.web.client.HttpClientErrorException
