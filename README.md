@@ -7,13 +7,14 @@ A comprehensive example demonstrating how to implement **Circuit Breaker** and *
 - [Overview](#overview)
 - [Architecture](#architecture)
 - [Key Concepts](#key-concepts)
-- [How It Works](#how-it-works)
 - [Configuration](#configuration)
 - [Getting Started](#getting-started)
 - [Testing Scenarios](#testing-scenarios)
 - [Monitoring](#monitoring)
 - [Best Practices](#best-practices)
+- [Understanding the Code](#understanding-the-code)
 - [References](#references)
+- [Acknowledgments](#acknowledgments)
 
 ## 🎯 Overview
 
