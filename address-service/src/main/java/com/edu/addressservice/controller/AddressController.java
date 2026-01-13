@@ -8,6 +8,8 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.edu.addressservice.model.Address;
 import com.edu.addressservice.service.AddressService;
+import java.time.Duration;
+import java.time.temporal.TemporalUnit;
 
 @RestController
 @RequestMapping("addresses")
@@ -15,7 +17,8 @@ public class AddressController {
     @Autowired
     private AddressService addressService;
     @GetMapping("/{postalCode}")
-    public Address getAddressByPostalCode(@PathVariable("postalCode") String postalCode) {
+    public Address getAddressByPostalCode(@PathVariable("postalCode") String postalCode) throws InterruptedException {
+        //Thread.sleep(30000);
         return addressService.getAddressByPostalCode(postalCode);
     }
 }

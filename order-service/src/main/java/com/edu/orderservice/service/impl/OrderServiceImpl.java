@@ -1,10 +1,17 @@
 package com.edu.orderservice.service.impl;
 
+import com.edu.orderservice.chaos.ChaosFaultInjector;
+import io.github.resilience4j.bulkhead.annotation.Bulkhead;
+import io.github.resilience4j.ratelimiter.RequestNotPermitted;
+import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.HttpServerErrorException;
+import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestTemplate;
 
 import com.edu.orderservice.dto.AddressDTO;
@@ -14,9 +21,12 @@ import com.edu.orderservice.model.Type;
 import com.edu.orderservice.repository.OrderRepository;
 import com.edu.orderservice.service.OrderService;
 
+import io.github.resilience4j.bulkhead.BulkheadFullException;
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import io.github.resilience4j.retry.annotation.Retry;
+
+import java.util.concurrent.TimeoutException;
 
 @Service
 public class OrderServiceImpl implements OrderService {
@@ -32,6 +42,27 @@ public class OrderServiceImpl implements OrderService {
 
     private static final String SERVICE_NAME = "order-service";
     private static final String ADDRESS_SERVICE_URL = "http://localhost:9090/addresses/";
+
+    // ---------------------------------------------------------------------
+    // CHAOS CONFIGURATION (feature-flag driven)
+    // ---------------------------------------------------------------------
+//    @Value("${chaos.enabled:false}")
+//    private boolean chaosEnabled;
+//
+//    @Value("${chaos.latency-ms:0}")
+//    private long chaosLatencyMs;
+//
+//    @Value("${chaos.timeout-probability:0}")
+//    private double timeoutProbability;
+//
+//    @Value("${chaos.connection-error-probability:0}")
+//    private double connectionErrorProbability;
+//
+//    @Value("${chaos.http-500-probability:0}")
+//    private double http500Probability;
+
+    @Autowired
+    private ChaosFaultInjector chaosFaultInjector;
 
     // ---------------------------------------------------------------------
     // IMPORTANT: Annotation order matters in Spring AOP
@@ -119,6 +150,8 @@ public class OrderServiceImpl implements OrderService {
     //     - Other exceptions         → External service failure after retries
     //
     // ---------------------------------------------------------------------
+    @RateLimiter(name = SERVICE_NAME, fallbackMethod = "rateLimitFallback")
+    @Bulkhead(name = SERVICE_NAME, type = Bulkhead.Type.SEMAPHORE, fallbackMethod = "bulkheadFallback")
     @Retry(name = SERVICE_NAME, fallbackMethod = "retryFallbackMethod")
     @CircuitBreaker(name = SERVICE_NAME)
     public Type getOrderByPostCode(String orderNumber) {
@@ -126,15 +159,24 @@ public class OrderServiceImpl implements OrderService {
         // -----------------------------------------------------------------
         // Method entry log (important for tracing retries)
         // -----------------------------------------------------------------
-        log.info("Starting getOrderByPostCode. orderNumber={}", orderNumber);
+        log.error(">>> METHOD BODY ENTERED <<< orderNumber={}", orderNumber);
 
         Order order = orderRepository.findByOrderNumber(orderNumber)
+
                 .orElseThrow(() -> {
                     log.error("Order not found. orderNumber={}", orderNumber);
                     return new RuntimeException("Order Not Found: " + orderNumber);
                 });
 
         String postalCode = order.getPostalCode();
+
+        // -----------------------------------------------------------------
+        // CHAOS INJECTION (before external call)
+        // -----------------------------------------------------------------
+        //chaosMonkey();
+
+        // 🔥 FAULT INJECTION
+        chaosFaultInjector.inject();
 
         // -----------------------------------------------------------------
         // External service call log
@@ -180,10 +222,52 @@ public class OrderServiceImpl implements OrderService {
     }
 
     // ---------------------------------------------------------------------
+    // CHAOS ENGINEERING CORE
+    // ---------------------------------------------------------------------
+//    private void chaosMonkey() {
+//
+//        if (!chaosEnabled) {
+//            return;
+//        }
+//
+//        double r = Math.random();
+//
+//        if (chaosLatencyMs > 0) {
+//            try {
+//                log.warn("CHAOS: Injecting latency {}ms", chaosLatencyMs);
+//                Thread.sleep(chaosLatencyMs);
+//            } catch (InterruptedException e) {
+//                Thread.currentThread().interrupt();
+//            }
+//        }
+//
+//        if (r < timeoutProbability) {
+//            log.warn("CHAOS: Injecting TIMEOUT");
+//            throw new ResourceAccessException("Chaos timeout");
+//        }
+//
+//        if (r < timeoutProbability + connectionErrorProbability) {
+//            log.warn("CHAOS: Injecting CONNECTION FAILURE");
+//            throw new ResourceAccessException("Chaos connection failure");
+//        }
+//
+//        if (r < timeoutProbability + connectionErrorProbability + http500Probability) {
+//            log.warn("CHAOS: Injecting HTTP 500");
+//            throw new HttpServerErrorException(HttpStatus.INTERNAL_SERVER_ERROR);
+//        }
+//    }
+    // ---------------------------------------------------------------------
     // Retry fallback (called AFTER all retry attempts are exhausted)
     // ---------------------------------------------------------------------
     private Type retryFallbackMethod(String orderNumber, Exception e) {
 
+//        if (e instanceof BulkheadFullException) {
+//            log.warn("Bulkhead FULL. orderNumber={}", orderNumber);
+//            return new Failure("Service is busy. Please try again later.",
+//                    "BULKHEAD_FULL",
+//                    true);
+//        }
+//
         // -----------------------------------------------------------------
         // Circuit Breaker OPEN (fail-fast scenario)
         // -----------------------------------------------------------------
@@ -193,7 +277,9 @@ public class OrderServiceImpl implements OrderService {
                     orderNumber
             );
             return new Failure(
-                    "Address service is unavailable - Circuit breaker is OPEN"
+                    "Address service is unavailable - Circuit breaker is OPEN",
+                    "CIRCUIT_OPEN",
+                    true
             );
         }
 
@@ -208,7 +294,43 @@ public class OrderServiceImpl implements OrderService {
         );
 
         return new Failure(
-                "Address service failed after retry attempts: " + e.getMessage()
+                "Address service failed after retry attempts: " + e.getMessage(),
+                "RETRY_EXHAUSTED",
+                false
+        );
+    }
+
+//    private Type circuitFallback(
+//            String orderNumber,
+//            CallNotPermittedException ex
+//    ) {
+//        log.error("CIRCUIT OPEN. orderNumber={}", orderNumber);
+//        return new Failure("CIRCUIT_OPEN", "Service temporarily unavailable", true);
+//    }
+
+
+    private Type bulkheadFallback(
+            String orderNumber,
+            BulkheadFullException ex
+    ) {
+        log.warn("BULKHEAD FULL. orderNumber={}", orderNumber);
+        return new Failure("Service overloaded", "BULKHEAD_FULL", true);
+    }
+
+
+    private Type rateLimitFallback(String orderNumber, RequestNotPermitted e) {
+        log.error(
+                ">>> RATE LIMITER FALLBACK <<< orderNumber={}, exception={}",
+                orderNumber,
+                e.getClass().getName(),
+                e
+        );
+
+
+        return new Failure(
+                "Too many requests. Please try again later.",
+                "RATE_LIMIT",
+                false
         );
     }
 }

@@ -1,0 +1,62 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: false
+    database-platform: org.hibernate.dialect.H2Dialect
+
+fault:
+  enabled: false
+  timeout: false
+  connection-error: false
+  http500: false
+  latency: false
+  latencyMS: 0
+
+chaos:
+  enabled: false
+  latency-ms: 0
+  timeout-probability: 0
+  connection-error-probability: 0
+  http-500-probability: 0
+
+resilience4j:
+  retry:
+    instances:
+      order-service:
+        max-attempts: 3
+        wait-duration: 0
+
+  circuitbreaker:
+    instances:
+      order-service:
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 2
+        minimum-number-of-calls: 1
+        wait-duration-in-open-state: 1s
+        permitted-number-of-calls-in-half-open-state: 1
+        failure-rate-threshold: 50
+
+  bulkhead:
+    instances:
+      order-service:
+        max-concurrent-calls: 2
+        max-wait-duration: 0
+
+  ratelimiter:
+    instances:
+      order-service:
+        limit-for-period: 2
+        limit-refresh-period: 10s
+        timeout-duration: 0
+
+logging:
+  level:
+    root: WARN
+    com.edu.orderservice: DEBUG

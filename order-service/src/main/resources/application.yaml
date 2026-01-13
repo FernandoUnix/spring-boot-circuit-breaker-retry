@@ -1,3 +1,25 @@
+fault:
+  enabled: true
+  timeout: false
+  connection-error: false
+  http500: false
+  latency: false
+  latencyMS: 0
+
+chaos:
+  enabled: true
+  latency-ms: 3000
+  timeout-probability: 0.2
+  connection-error-probability: 0.2
+  http-500-probability: 0.1
+
+logging:
+  level:
+    io.github.resilience4j.ratelimiter: DEBUG
+    io.github.resilience4j.spring6.ratelimiter: DEBUG
+    io.github.resilience4j.retry: DEBUG
+    io.github.resilience4j.bulkhead: DEBUG
+
 management:
   endpoint:
     health:
@@ -5,10 +27,16 @@ management:
   endpoints:
     web:
       exposure:
-        include: health
+        include: health, metrics
   health:
     circuitbreakers:
       enabled: true
+    retries:
+      enabled: true
+    bulkheads:
+      enabled: true
+#    ratelimiters:
+#      enabled: true
 
   # ------------------------------------------------------------------
   # Mental model (how this configuration behaves in practice)
@@ -26,6 +54,30 @@ management:
   # ------------------------------------------------------------------
 
 resilience4j:
+  ratelimiter:
+    instances:
+      order-service:
+        # Maximum number of requests allowed in each refresh period
+        # Example: allow up to 10 requests
+        limit-for-period: 10
+
+        # Time window used to refresh the rate limit counter
+        # Example: every 10 seconds the available permissions are reset
+        limit-refresh-period: 10s
+
+        # Maximum time a request will wait for permission
+        # 0 means fail fast:
+        # - If no permission is available, the request is rejected immediately
+        # - A RequestNotPermitted exception is thrown
+        timeout-duration: 0
+  bulkhead:
+    instances:
+      order-service:
+        # Maximum number of concurrent calls allowed
+        max-concurrent-calls: 2
+
+        # Maximum time to wait for a free slot
+        max-wait-duration: 0
   retry:
     instances:
       order-service:
@@ -33,7 +85,7 @@ resilience4j:
         # max-attempts: 2 means:
         #   - 1 initial execution
         #   - 1 retry if a retryable exception occurs
-        max-attempts: 2
+        max-attempts: 3
 
         # Time to wait before retrying a failed attempt
         wait-duration: 1s
@@ -59,6 +111,7 @@ resilience4j:
 
         # Do NOT retry for programming or business errors
         ignore-exceptions:
+          - io.github.resilience4j.ratelimiter.RequestNotPermitted
           - java.lang.IllegalArgumentException
 
   circuitbreaker:
