@@ -1,0 +1,162 @@
+{
+  "dashboard": {
+    "title": "Order Service - Resilience4j & Application Metrics",
+    "tags": ["order-service", "resilience4j", "spring-boot"],
+    "timezone": "browser",
+    "schemaVersion": 27,
+    "version": 1,
+    "refresh": "10s",
+    "panels": [
+      {
+        "id": 1,
+        "title": "HTTP Request Rate",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+        "targets": [
+          {
+            "expr": "rate(http_server_requests_seconds_count[5m])",
+            "legendFormat": "{{method}} {{uri}} - {{status}}",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {"format": "reqps", "label": "Requests/sec"},
+          {"format": "short"}
+        ]
+      },
+      {
+        "id": 2,
+        "title": "HTTP Request Latency (p95)",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+        "targets": [
+          {
+            "expr": "http_server_requests_seconds{quantile=\"0.95\"}",
+            "legendFormat": "{{uri}} - p95",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {"format": "s", "label": "Latency"},
+          {"format": "short"}
+        ]
+      },
+      {
+        "id": 3,
+        "title": "Circuit Breaker State",
+        "type": "stat",
+        "gridPos": {"h": 4, "w": 6, "x": 0, "y": 8},
+        "targets": [
+          {
+            "expr": "resilience4j_circuitbreaker_state{name=\"order-service\"}",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "mappings": [
+              {"type": "value", "options": {"0": {"text": "CLOSED", "color": "green"}}},
+              {"type": "value", "options": {"1": {"text": "OPEN", "color": "red"}}},
+              {"type": "value", "options": {"2": {"text": "HALF_OPEN", "color": "yellow"}}}
+            ]
+          }
+        }
+      },
+      {
+        "id": 4,
+        "title": "Circuit Breaker Calls",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
+        "targets": [
+          {
+            "expr": "rate(resilience4j_circuitbreaker_calls_total{name=\"order-service\"}[5m])",
+            "legendFormat": "{{kind}} - {{state}}",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {"format": "ops", "label": "Calls/sec"},
+          {"format": "short"}
+        ]
+      },
+      {
+        "id": 5,
+        "title": "Retry Statistics",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 12},
+        "targets": [
+          {
+            "expr": "rate(resilience4j_retry_calls_total{name=\"order-service\"}[5m])",
+            "legendFormat": "{{kind}}",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {"format": "ops", "label": "Calls/sec"},
+          {"format": "short"}
+        ]
+      },
+      {
+        "id": 6,
+        "title": "Bulkhead Available Calls",
+        "type": "graph",
+        "gridPos": {"h": 6, "w": 8, "x": 0, "y": 20},
+        "targets": [
+          {
+            "expr": "resilience4j_bulkhead_available_concurrent_calls{name=\"order-service\"}",
+            "legendFormat": "Available",
+            "refId": "A"
+          },
+          {
+            "expr": "resilience4j_bulkhead_max_allowed_concurrent_calls{name=\"order-service\"}",
+            "legendFormat": "Max Allowed",
+            "refId": "B"
+          }
+        ],
+        "yaxes": [
+          {"format": "short", "label": "Concurrent Calls"},
+          {"format": "short"}
+        ]
+      },
+      {
+        "id": 7,
+        "title": "Rate Limiter Calls",
+        "type": "graph",
+        "gridPos": {"h": 6, "w": 8, "x": 8, "y": 20},
+        "targets": [
+          {
+            "expr": "rate(resilience4j_ratelimiter_calls_total{name=\"order-service\"}[5m])",
+            "legendFormat": "{{kind}}",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {"format": "ops", "label": "Calls/sec"},
+          {"format": "short"}
+        ]
+      },
+      {
+        "id": 8,
+        "title": "JVM Memory",
+        "type": "graph",
+        "gridPos": {"h": 6, "w": 8, "x": 16, "y": 20},
+        "targets": [
+          {
+            "expr": "jvm_memory_used_bytes{area=\"heap\"}",
+            "legendFormat": "{{id}}",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {"format": "bytes", "label": "Memory"},
+          {"format": "short"}
+        ]
+      }
+    ],
+    "time": {
+      "from": "now-15m",
+      "to": "now"
+    }
+  }
+}
+

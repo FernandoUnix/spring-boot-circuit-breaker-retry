@@ -1,0 +1,13 @@
+apiVersion: 1
+
+providers:
+  - name: 'Order Service Dashboards'
+    orgId: 1
+    folder: 'Order Service'
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
+

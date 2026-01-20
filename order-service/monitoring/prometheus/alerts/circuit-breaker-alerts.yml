@@ -1,0 +1,108 @@
+groups:
+  - name: circuit_breaker_alerts
+    interval: 30s
+    rules:
+      - alert: CircuitBreakerOpen
+        expr: resilience4j_circuitbreaker_state{state="open"} == 1
+        for: 1m
+        labels:
+          severity: critical
+          component: resilience4j
+        annotations:
+          summary: "Circuit Breaker is OPEN for {{ $labels.name }}"
+          description: "Circuit breaker '{{ $labels.name }}' has been OPEN for more than 1 minute. Service is failing fast."
+
+      - alert: CircuitBreakerHighFailureRate
+        expr: |
+          (
+            rate(resilience4j_circuitbreaker_calls_total{kind="failed"}[5m])
+            /
+            rate(resilience4j_circuitbreaker_calls_total[5m])
+          ) > 0.5
+        for: 2m
+        labels:
+          severity: warning
+          component: resilience4j
+        annotations:
+          summary: "High failure rate detected for {{ $labels.name }}"
+          description: "Circuit breaker '{{ $labels.name }}' has failure rate above 50% for more than 2 minutes."
+
+  - name: retry_alerts
+    interval: 30s
+    rules:
+      - alert: HighRetryRate
+        expr: |
+          (
+            rate(resilience4j_retry_calls_total{kind="successful_with_retry"}[5m])
+            /
+            rate(resilience4j_retry_calls_total[5m])
+          ) > 0.3
+        for: 5m
+        labels:
+          severity: warning
+          component: resilience4j
+        annotations:
+          summary: "High retry rate for {{ $labels.name }}"
+          description: "More than 30% of calls to '{{ $labels.name }}' require retries, indicating service instability."
+
+      - alert: RetryExhausted
+        expr: |
+          rate(resilience4j_retry_calls_total{kind="failed_with_retry"}[5m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+          component: resilience4j
+        annotations:
+          summary: "Retries exhausted for {{ $labels.name }}"
+          description: "Calls to '{{ $labels.name }}' are failing even after retries."
+
+  - name: application_alerts
+    interval: 30s
+    rules:
+      - alert: HighLatency
+        expr: |
+          http_server_requests_seconds{quantile="0.95"} > 1
+        for: 5m
+        labels:
+          severity: warning
+          component: http
+        annotations:
+          summary: "High latency detected (p95 > 1s)"
+          description: "95th percentile latency for {{ $labels.uri }} is {{ $value }}s"
+
+      - alert: HighErrorRate
+        expr: |
+          (
+            rate(http_server_requests_seconds_count{status=~"5.."}[5m])
+            /
+            rate(http_server_requests_seconds_count[5m])
+          ) > 0.1
+        for: 2m
+        labels:
+          severity: critical
+          component: http
+        annotations:
+          summary: "High HTTP error rate ({{ $value | humanizePercentage }})"
+          description: "Error rate for {{ $labels.uri }} is above 10%"
+
+      - alert: BulkheadFull
+        expr: resilience4j_bulkhead_available_concurrent_calls == 0
+        for: 1m
+        labels:
+          severity: warning
+          component: resilience4j
+        annotations:
+          summary: "Bulkhead is full for {{ $labels.name }}"
+          description: "All concurrent call slots are occupied for bulkhead '{{ $labels.name }}'"
+
+      - alert: RateLimitExceeded
+        expr: |
+          rate(resilience4j_ratelimiter_calls_total{kind="not_permitted"}[5m]) > 0
+        for: 1m
+        labels:
+          severity: info
+          component: resilience4j
+        annotations:
+          summary: "Rate limit exceeded for {{ $labels.name }}"
+          description: "Rate limiter '{{ $labels.name }}' is rejecting requests"
+
