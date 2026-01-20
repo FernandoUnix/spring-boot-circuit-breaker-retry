@@ -1,229 +1,99 @@
-# Circuit Breaker Pattern with Retry in Spring Boot
+# Spring Boot Resilience Patterns with Observability
 
-A comprehensive example demonstrating how to implement **Circuit Breaker** and **Retry** patterns together in Spring Boot using Resilience4j. This project shows best practices for building resilient microservices that can gracefully handle failures in external dependencies.
+> **Note:** This project is for **study purposes** only. It demonstrates comprehensive resilience patterns, metrics, and monitoring in Spring Boot microservices.
 
-## 📋 Table of Contents
+## Overview
 
-- [Overview](#overview)
-- [Architecture](#architecture)
-- [Key Concepts](#key-concepts)
-- [Configuration](#configuration)
-- [Getting Started](#getting-started)
-- [Testing Scenarios](#testing-scenarios)
-- [Monitoring](#monitoring)
-- [Best Practices](#best-practices)
-- [Understanding the Code](#understanding-the-code)
-- [References](#references)
-- [Acknowledgments](#acknowledgments)
+A complete Spring Boot microservices example implementing **4 resilience patterns** together with full observability stack:
 
-## 🎯 Overview
+1. **Order Service** (Port `8080`)
+   - **Resilience Patterns**: Rate Limiter, Bulkhead, Retry, Circuit Breaker
+   - **Observability**: Micrometer, Prometheus, Grafana
+   - **Chaos Engineering**: Fault injection capabilities
+   - Calls Address Service to fetch shipping addresses
 
-This project consists of two Spring Boot microservices:
-
-1. **Order Service** (`order-service`) - Port `1010`
-   - Manages orders and retrieves shipping addresses
-   - Implements Circuit Breaker + Retry patterns
-   - Calls Address Service to fetch address details
-
-2. **Address Service** (`address-service`) - Port `9090`
+2. **Address Service** (Port `9093`)
    - Provides address information by postal code
-   - Simulates an external dependency that can fail
+   - Simulates external dependency failures
 
-### Why This Pattern?
+## Features
 
-In distributed systems, external services can fail due to:
-- Network timeouts
-- Service overload
-- Temporary unavailability
-- Infrastructure issues
+### Resilience Patterns (All Combined)
+- **Rate Limiter**: 10 requests per 10s window
+- **Bulkhead**: Max 2 concurrent calls (semaphore-based)
+- **Retry**: 3 attempts with exponential backoff (1s → 2s → 4s)
+- **Circuit Breaker**: TIME_BASED sliding window, opens at 50% failure rate
 
-**Circuit Breaker** prevents cascading failures by "opening" when a service is down, while **Retry** handles transient failures automatically. Together, they provide robust resilience.
+### Observability Stack
+- **Micrometer**: Custom business metrics (order processing, success/failure rates, duration)
+- **Prometheus**: Metrics scraping with alerting rules
+- **Grafana**: Pre-configured dashboards for visualization
+- **Spring Actuator**: Health checks, metrics, and Prometheus endpoints
 
-## 🏗️ Architecture
+### Chaos Engineering
+- Configurable fault injection (timeout, connection errors, HTTP 500, latency)
+- Feature-flag driven chaos testing
 
-```
-┌─────────────────┐
-│   Client/User   │
-└────────┬────────┘
-         │
-         │ HTTP Request
-         ▼
-┌─────────────────────────────────────┐
-│      Order Service (Port 1010)     │
-│  ┌───────────────────────────────┐ │
-│  │  @Retry (OUTER)               │ │
-│  │    └─ @CircuitBreaker (INNER) │ │
-│  │         └─ HTTP Call          │ │
-│  └───────────────────────────────┘ │
-└────────┬────────────────────────────┘
-         │
-         │ HTTP Request
-         ▼
-┌─────────────────────────────────────┐
-│   Address Service (Port 9090)     │
-│   (External Dependency)           │
-└────────────────────────────────────┘
-```
-
-## 🔑 Key Concepts
-
-### Circuit Breaker States
-
-The Circuit Breaker has three states:
-
-1. **CLOSED** ✅
-   - Normal operation
-   - All calls are allowed
-   - Failures are recorded and counted
-   - Transitions to OPEN if failure rate exceeds threshold
-
-2. **OPEN** 🔴
-   - Service is considered down
-   - All calls are **immediately rejected** (fail-fast)
-   - No HTTP calls are made (saves resources)
-   - Throws `CallNotPermittedException`
-   - Automatically transitions to HALF_OPEN after wait duration
-
-3. **HALF_OPEN** 🟡
-   - Testing if service has recovered
-   - Limited number of test calls allowed
-   - If test calls succeed → transitions to CLOSED
-   - If test calls fail → transitions back to OPEN
-
-### Retry Pattern
-
-- Automatically retries failed operations
-- Handles **transient failures** (network glitches, timeouts)
-- Uses exponential backoff to avoid overwhelming the service
-- Only retries specific exception types (configurable)
-
-### Why Combine Them?
+## Architecture
 
 ```
-Request Flow:
-1. Retry (OUTER) intercepts first
-   └─> 2. CircuitBreaker (INNER) checks state
-       └─> 3. If CLOSED: Execute method
-       └─> 4. If OPEN: Throw CallNotPermittedException immediately
-   └─> 5. If exception occurs: Retry attempts again (up to max-attempts)
-   └─> 6. After retries exhausted: Fallback is called
+Client
+  ↓
+Order Service (Port 8080)
+  ├─ @RateLimiter (outermost)
+  ├─ @Bulkhead
+  ├─ @Retry
+  ├─ @CircuitBreaker (innermost)
+  ├─ Micrometer Metrics
+  └─ Chaos Fault Injector
+  ↓
+Address Service (Port 9093)
+
+Monitoring Stack:
+  ├─ Prometheus (Port 9090)
+  └─ Grafana (Port 3000)
 ```
 
-**Benefits:**
-- Retry handles transient failures before Circuit Breaker sees them
-- Circuit Breaker only records **final** outcomes (after retries)
-- Prevents Circuit Breaker from opening too aggressively
-- When Circuit Breaker is OPEN, retries are skipped (fail-fast)
-
-## ⚙️ Configuration
-
-### Retry Configuration
-
-```yaml
-resilience4j:
-  retry:
-    instances:
-      order-service:
-        max-attempts: 2                    # 1 initial + 1 retry
-        wait-duration: 1s                  # Base wait time
-        enable-exponential-backoff: true   # Exponential backoff enabled
-        exponential-backoff-multiplier: 2  # Wait time doubles each retry
-        exponential-max-wait-duration: 5s  # Maximum wait cap
-        
-        # Only retry on technical/transient failures
-        retry-exceptions:
-          - org.springframework.web.client.ResourceAccessException
-          - org.springframework.web.client.HttpServerErrorException
-          - java.net.ConnectException
-          - java.util.concurrent.TimeoutException
-        
-        # Don't retry on business logic errors
-        ignore-exceptions:
-          - java.lang.IllegalArgumentException
-```
-
-**Retry Behavior:**
-- **Attempt 1**: Immediate execution
-- **Attempt 2** (if attempt 1 fails): Wait 1s, then retry
-- **Attempt 3** (if attempt 2 fails): Wait 2s, then retry (if max-attempts > 2)
-- Maximum wait between retries: 5 seconds
-
-### Circuit Breaker Configuration
-
-```yaml
-resilience4j:
-  circuitbreaker:
-    instances:
-      order-service:
-        sliding-window-type: TIME_BASED    # Evaluate last 30 seconds
-        sliding-window-size: 30            # 30-second window
-        failure-rate-threshold: 50         # Open if 50%+ failures
-        minimum-number-of-calls: 5          # Need 5 calls before evaluating
-        wait-duration-in-open-state: 5s    # Stay OPEN for 5 seconds
-        permitted-number-of-calls-in-half-open-state: 3  # 3 test calls
-        automatic-transition-from-open-to-half-open-enabled: true
-        
-        # Only record technical failures
-        record-exceptions:
-          - java.net.ConnectException
-          - java.util.concurrent.TimeoutException
-          - org.springframework.web.client.ResourceAccessException
-          - org.springframework.web.client.HttpServerErrorException
-        
-        # Ignore business/client errors
-        ignore-exceptions:
-          - java.lang.IllegalArgumentException
-          - org.springframework.web.client.HttpClientErrorException
-```
-
-**Circuit Breaker Behavior:**
-- Monitors calls in the **last 30 seconds** (TIME_BASED window)
-- Requires **minimum 5 calls** before evaluating failure rate
-- Opens circuit if **50% or more** calls fail
-- Stays OPEN for **5 seconds**, then transitions to HALF_OPEN
-- Allows **3 test calls** in HALF_OPEN state
-
-## 🚀 Getting Started
+## Getting Started
 
 ### Prerequisites
-
-- Java 17 or higher
+- Java 17+
 - Maven 3.6+
-- IDE (IntelliJ IDEA, Eclipse, or VS Code)
+- Docker & Docker Compose
 
 ### Running the Application
 
-#### 1. Start Address Service
-
+1. **Start Address Service:**
 ```bash
 cd address-service
 ./mvnw spring-boot:run
-# Or on Windows:
-mvnw.cmd spring-boot:run
 ```
 
-Address Service will start on **http://localhost:9090**
-
-#### 2. Start Order Service
-
+2. **Start Order Service:**
 ```bash
 cd order-service
 ./mvnw spring-boot:run
-# Or on Windows:
-mvnw.cmd spring-boot:run
 ```
 
-Order Service will start on **http://localhost:1010**
+3. **Start Monitoring Stack:**
+```bash
+cd order-service
+docker-compose up -d
+```
 
-### Testing the API
+**Access Points:**
+- Order Service: `http://localhost:8080`
+- Address Service: `http://localhost:9093`
+- Prometheus: `http://localhost:9090`
+- Grafana: `http://localhost:3000` (admin/admin)
 
-#### Get Order with Address
+### Testing
 
 ```bash
-curl "http://localhost:1010/orders?orderNumber=0c70c0c2"
+curl "http://localhost:8080/orders?orderNumber=0c70c0c2"
 ```
 
-**Expected Response (Success):**
+**Success Response:**
 ```json
 {
   "orderNumber": "0c70c0c2",
@@ -234,251 +104,180 @@ curl "http://localhost:1010/orders?orderNumber=0c70c0c2"
 }
 ```
 
-**Expected Response (Failure):**
-```json
-{
-  "msg": "Address service failed after retry attempts: Connection refused: connect"
-}
+**Failure Responses:**
+- Circuit OPEN: `{"msg": "...", "reason": "CIRCUIT_OPEN"}`
+- Retry Exhausted: `{"msg": "...", "reason": "RETRY_EXHAUSTED"}`
+- Rate Limited: `{"msg": "...", "reason": "RATE_LIMIT"}`
+- Bulkhead Full: `{"msg": "...", "reason": "BULKHEAD_FULL"}`
+
+## Configuration
+
+### Resilience4j Patterns
+
+**Rate Limiter:**
+- `limit-for-period: 10` requests per `10s`
+- `timeout-duration: 0` (fail-fast)
+
+**Bulkhead:**
+- `max-concurrent-calls: 2`
+- `max-wait-duration: 0` (fail-fast)
+
+**Retry:**
+- `max-attempts: 3` (1 initial + 2 retries)
+- Exponential backoff: 1s → 2s → 4s (max 5s)
+- Retries: `ResourceAccessException`, `HttpServerErrorException`, `ConnectException`, `TimeoutException`
+
+**Circuit Breaker:**
+- `sliding-window-type: TIME_BASED` (30 seconds)
+- `failure-rate-threshold: 50%`
+- `minimum-number-of-calls: 5`
+- `wait-duration-in-open-state: 5s`
+- `permitted-number-of-calls-in-half-open-state: 3`
+
+### Custom Metrics (Micrometer)
+
+- `order.processed.total` - Total orders processed
+- `order.successful.total` - Successful orders
+- `order.failed.total` - Failed orders (tagged by reason: CIRCUIT_OPEN, RETRY_EXHAUSTED, RATE_LIMIT, BULKHEAD_FULL, ORDER_NOT_FOUND)
+- `order.processing.duration` - Processing time (p50, p95, p99 percentiles)
+- `order.by.postal.code` - Orders by postal code
+
+### Chaos Engineering
+
+Configure in `application.yaml`:
+```yaml
+fault:
+  enabled: true
+  timeout: false
+  connection-error: false
+  http500: false
+  latency: false
+  latencyMS: 0
 ```
 
-## 🧪 Testing Scenarios
+## Monitoring
 
-### Scenario 1: Normal Operation (Circuit CLOSED)
+### Actuator Endpoints
+- Health: `http://localhost:8080/actuator/health`
+- Metrics: `http://localhost:8080/actuator/metrics`
+- Prometheus: `http://localhost:8080/actuator/prometheus`
 
-1. Both services running
-2. Make a request: `GET /orders?orderNumber=0c70c0c2`
-3. **Result**: Success, address retrieved
+### Grafana Dashboard
+Pre-configured dashboard (`order-service-dashboard.json`) includes:
+- Circuit Breaker state and metrics
+- Retry statistics (successful, failed, exhausted)
+- Rate Limiter metrics
+- Bulkhead metrics
+- Custom order processing metrics
+- HTTP request metrics
+- Failure rates by reason
 
-**What happens:**
-- Circuit Breaker: CLOSED ✅
-- Retry: Not needed (first attempt succeeds)
-- Response: Order with address details
+### Prometheus Alerts
+Configured alert rules (`circuit-breaker-alerts.yml`):
+- **CircuitBreakerOpen**: Circuit OPEN for >1 minute
+- **CircuitBreakerHighFailureRate**: Failure rate >50% for >2 minutes
+- **HighRetryRate**: Retry rate >30% for >5 minutes
+- **RetryExhausted**: Retries exhausted
+- **HighLatency**: p95 latency >1s for >5 minutes
+- **HighErrorRate**: HTTP error rate >10% for >2 minutes
+- **BulkheadFull**: All concurrent slots occupied for >1 minute
+- **RateLimitExceeded**: Rate limit exceeded
 
-### Scenario 2: Transient Failure (Retry Handles It)
+## Implementation Details
 
-1. Stop Address Service temporarily
-2. Make a request: `GET /orders?orderNumber=0c70c0c2`
-3. Start Address Service within 1-2 seconds
-4. **Result**: Retry succeeds on second attempt
-
-**What happens:**
-- Circuit Breaker: CLOSED ✅
-- Retry: First attempt fails → waits 1s → retries → succeeds
-- Response: Order with address details (after retry)
-
-### Scenario 3: Service Down (Circuit Opens)
-
-1. Stop Address Service completely
-2. Make **5+ requests** rapidly (to trigger circuit opening)
-3. **Result**: Circuit Breaker opens after 50% failure rate
-
-**What happens:**
-- Circuit Breaker: CLOSED → OPEN 🔴
-- After 5+ failures: Circuit opens
-- Subsequent requests: Fail-fast with `CallNotPermittedException`
-- No HTTP calls made (saves resources)
-- Response: "Circuit breaker is OPEN"
-
-### Scenario 4: Service Recovery (Circuit Closes)
-
-1. Circuit is OPEN
-2. Wait 5 seconds (wait-duration-in-open-state)
-3. Start Address Service
-4. Circuit transitions to HALF_OPEN
-5. Make a request
-6. **Result**: Test call succeeds, circuit closes
-
-**What happens:**
-- Circuit Breaker: OPEN → HALF_OPEN → CLOSED ✅
-- Test calls in HALF_OPEN state
-- If successful: Circuit closes
-- Response: Order with address details
-
-## 📊 Monitoring
-
-### Health Check Endpoint
-
-Check Circuit Breaker status:
-
-```bash
-curl http://localhost:1010/actuator/health
-```
-
-**Response:**
-```json
-{
-  "status": "UP",
-  "components": {
-    "circuitBreakers": {
-      "status": "UP",
-      "details": {
-        "order-service": {
-          "status": "UP",
-          "details": {
-            "failureRate": "0.0%",
-            "failureRateThreshold": "50.0%",
-            "state": "CLOSED",
-            "bufferedCalls": 10,
-            "failedCalls": 0,
-            "notPermittedCalls": 0
-          }
-        }
-      }
-    }
-  }
-}
-```
-
-### Key Metrics
-
-- **state**: Current circuit state (CLOSED, OPEN, HALF_OPEN)
-- **failureRate**: Percentage of failed calls
-- **bufferedCalls**: Total calls in the sliding window
-- **failedCalls**: Number of failed calls
-- **notPermittedCalls**: Calls rejected when circuit was OPEN
-
-### Logging
-
-The application uses SLF4J logging. Check logs to see:
-
-- Retry attempts: `Starting getOrderByPostCode. orderNumber=...`
-- Success: `Successfully retrieved address...`
-- Circuit Breaker OPEN: `Circuit breaker OPEN for Address Service...`
-- Retry exhausted: `Retries exhausted for Address Service...`
-
-## 💡 Best Practices
-
-### 1. Annotation Order Matters
+### Annotation Order (Critical)
 
 ```java
+@RateLimiter(name = SERVICE_NAME, fallbackMethod = "rateLimitFallback")
+@Bulkhead(name = SERVICE_NAME, type = Bulkhead.Type.SEMAPHORE, fallbackMethod = "bulkheadFallback")
 @Retry(name = SERVICE_NAME, fallbackMethod = "retryFallbackMethod")
 @CircuitBreaker(name = SERVICE_NAME)
-public Type getOrderByPostCode(String orderNumber) {
-    // Method implementation
-}
+public Type getOrderByPostCode(String orderNumber) { ... }
 ```
 
+**Execution Flow:**
+1. Rate Limiter checks request rate (outermost)
+2. Bulkhead checks concurrent capacity
+3. Retry handles transient failures
+4. Circuit Breaker prevents cascading failures (innermost)
+5. Method execution
+
 **Why this order?**
-- `@Retry` (OUTER) handles retries first
-- `@CircuitBreaker` (INNER) records final outcomes
+- Rate Limiter and Bulkhead protect at the entry point
+- Retry handles transient failures before Circuit Breaker sees them
+- Circuit Breaker records final outcomes after retries
 - Prevents circuit from opening too aggressively
 
-### 2. Single Fallback Strategy
+### Fallback Strategy
 
-Use **only** Retry fallback, not Circuit Breaker fallback:
-
+Single Retry fallback handles all scenarios:
 ```java
 private Type retryFallbackMethod(String orderNumber, Exception e) {
     if (e instanceof CallNotPermittedException) {
         // Circuit is OPEN
-        return new Failure("Circuit breaker is OPEN");
+        return new Failure("Circuit breaker is OPEN", "CIRCUIT_OPEN", true);
     }
-    // Retries exhausted
-    return new Failure("Service failed after retries");
+    // Other failures after retries exhausted
+    return new Failure("Service failed after retries", "RETRY_EXHAUSTED", false);
 }
 ```
 
-### 3. Exception Classification
+Separate fallbacks for Rate Limiter and Bulkhead provide specific error messages.
 
-**Retry on:**
-- Network errors (`ConnectException`, `ResourceAccessException`)
-- Timeouts (`TimeoutException`)
-- Server errors (`HttpServerErrorException`)
+## Testing Scenarios
 
-**Don't retry on:**
-- Client errors (`HttpClientErrorException` - 4xx)
-- Business logic errors (`IllegalArgumentException`)
+1. **Normal Operation**: Both services running → Success
+2. **Transient Failure**: Stop Address Service briefly → Retry succeeds
+3. **Service Down**: Stop Address Service, make 5+ requests → Circuit opens
+4. **Recovery**: Wait 5s after circuit opens, start Address Service → Circuit closes
+5. **Rate Limiting**: Make 11+ requests in 10s → Rate limit fallback
+6. **Bulkhead Full**: Make 3+ concurrent requests → Bulkhead fallback
 
-### 4. Configuration Tuning
+## Project Structure
 
-**For High-Volume Services:**
-- Increase `minimum-number-of-calls` (e.g., 10-20)
-- Use TIME_BASED sliding window
-- Lower `failure-rate-threshold` (e.g., 30-40%)
-
-**For Low-Volume Services:**
-- Use COUNT_BASED sliding window
-- Lower `minimum-number-of-calls` (e.g., 3-5)
-- Higher `failure-rate-threshold` (e.g., 60-70%)
-
-### 5. Monitoring and Alerting
-
-- Monitor Circuit Breaker state transitions
-- Alert when circuit stays OPEN for extended periods
-- Track retry success rates
-- Monitor `notPermittedCalls` (indicates circuit is blocking requests)
-
-## 🔍 Understanding the Code
-
-### Key Implementation Details
-
-#### 1. Service Method
-
-```java
-@Retry(name = SERVICE_NAME, fallbackMethod = "retryFallbackMethod")
-@CircuitBreaker(name = SERVICE_NAME)
-public Type getOrderByPostCode(String orderNumber) {
-    // 1. Fetch order from database
-    Order order = orderRepository.findByOrderNumber(orderNumber)
-        .orElseThrow(() -> new RuntimeException("Order Not Found"));
-    
-    // 2. Call external Address Service
-    ResponseEntity<AddressDTO> response = restTemplate.exchange(
-        ADDRESS_SERVICE_URL + order.getPostalCode(),
-        HttpMethod.GET,
-        entity,
-        AddressDTO.class
-    );
-    
-    // 3. Map response and return
-    return order;
-}
+```
+order-service/
+├── monitoring/
+│   ├── prometheus/
+│   │   ├── prometheus.yml
+│   │   └── alerts/
+│   │       └── circuit-breaker-alerts.yml
+│   └── grafana/
+│       ├── dashboards/
+│       │   └── order-service-dashboard.json
+│       └── provisioning/
+│           ├── datasources/prometheus.yml
+│           └── dashboards/dashboard.yml
+├── docker-compose.yml
+└── src/main/java/
+    ├── chaos/
+    │   └── ChaosFaultInjector.java
+    ├── config/
+    │   ├── MetricsConfig.java
+    │   └── OrderMetrics.java
+    └── service/impl/
+        └── OrderServiceImpl.java
 ```
 
-**Important:** No try-catch blocks! Exceptions must propagate naturally for Circuit Breaker and Retry to work correctly.
+## Technologies
 
-#### 2. Fallback Method
+- **Spring Boot 3.0.5**
+- **Resilience4j** (Circuit Breaker, Retry, Rate Limiter, Bulkhead)
+- **Micrometer** (Metrics)
+- **Prometheus** (Metrics collection)
+- **Grafana** (Visualization)
+- **Spring Actuator** (Health & Metrics)
+- **H2 Database** (In-memory)
+- **Lombok**
 
-```java
-private Type retryFallbackMethod(String orderNumber, Exception e) {
-    // Check if circuit is OPEN
-    if (e instanceof CallNotPermittedException) {
-        return new Failure("Circuit breaker is OPEN");
-    }
-    
-    // Retries exhausted
-    return new Failure("Service failed after retries: " + e.getMessage());
-}
-```
+## References
 
-**Key Points:**
-- Only way to detect OPEN circuit: `CallNotPermittedException`
-- Fallback is called after ALL retry attempts are exhausted
-- Distinguish between circuit OPEN vs. service failure
-
-## 📚 References
-
-- **Resilience4j Documentation**: https://resilience4j.readme.io/
-- **Circuit Breaker Pattern**: https://martinfowler.com/bliki/CircuitBreaker.html
-- **Spring Cloud Circuit Breaker**: https://spring.io/projects/spring-cloud-circuitbreaker
-
-## 🙏 Acknowledgments
-
-This example was based on and inspired by the excellent article:
-- **Circuit Breaker Pattern in Spring Boot** by [@truongbui95](https://medium.com/@truongbui95): https://medium.com/@truongbui95/circuit-breaker-pattern-in-spring-boot-d2d258b75042
-
-The original article provided the foundation for this implementation, which has been extended with:
-- Retry pattern integration
-- Enhanced configuration examples
-
-## 🤝 Contributing
-
-Feel free to submit issues, fork the repository, and create pull requests for any improvements.
-
-## 📝 License
-
-This project is for educational purposes.
+- [Resilience4j Documentation](https://resilience4j.readme.io/)
+- [Circuit Breaker Pattern](https://martinfowler.com/bliki/CircuitBreaker.html)
+- [Micrometer Documentation](https://micrometer.io/)
+- [Prometheus Documentation](https://prometheus.io/docs/)
+- [Grafana Documentation](https://grafana.com/docs/)
 
 ---
 
-**Built with ❤️ using Spring Boot and Resilience4j**
+**Built with Spring Boot, Resilience4j, Micrometer, Prometheus & Grafana**

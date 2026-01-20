@@ -14,7 +14,7 @@ scrape_configs:
     scrape_interval: 10s
     scrape_timeout: 5s
     static_configs:
-      - targets: ['host.docker.internal:8080']
+      - targets: ['192.168.1.16:8080']  # Windows host IP - Docker in WSL can't use localhost
         labels:
           application: 'order-service'
           service: 'order-service'

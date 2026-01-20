@@ -14,6 +14,7 @@ import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestTemplate;
 
+import com.edu.orderservice.config.OrderMetrics;
 import com.edu.orderservice.dto.AddressDTO;
 import com.edu.orderservice.model.Failure;
 import com.edu.orderservice.model.Order;
@@ -25,8 +26,10 @@ import io.github.resilience4j.bulkhead.BulkheadFullException;
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import io.github.resilience4j.retry.annotation.Retry;
+import io.micrometer.core.instrument.Timer;
 
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 public class OrderServiceImpl implements OrderService {
@@ -34,14 +37,17 @@ public class OrderServiceImpl implements OrderService {
     private static final Logger log = LoggerFactory.getLogger(OrderServiceImpl.class);
 
     @Autowired
-
     private OrderRepository orderRepository;
 
     @Autowired
     private RestTemplate restTemplate;
 
+    @Autowired
+    private OrderMetrics orderMetrics;
+
     private static final String SERVICE_NAME = "order-service";
-    private static final String ADDRESS_SERVICE_URL = "http://localhost:9090/addresses/";
+    private static final ConcurrentHashMap<String, Timer.Sample> activeTimers = new ConcurrentHashMap<>();
+    private static final String ADDRESS_SERVICE_URL = "http://localhost:9093/addresses/";
 
     // ---------------------------------------------------------------------
     // CHAOS CONFIGURATION (feature-flag driven)
@@ -155,20 +161,26 @@ public class OrderServiceImpl implements OrderService {
     @Retry(name = SERVICE_NAME, fallbackMethod = "retryFallbackMethod")
     @CircuitBreaker(name = SERVICE_NAME)
     public Type getOrderByPostCode(String orderNumber) {
+        Timer.Sample timer = orderMetrics.startOrderProcessingTimer();
+        activeTimers.put(orderNumber, timer);
+        orderMetrics.incrementOrdersProcessed();
 
-        // -----------------------------------------------------------------
-        // Method entry log (important for tracing retries)
-        // -----------------------------------------------------------------
         log.error(">>> METHOD BODY ENTERED <<< orderNumber={}", orderNumber);
 
         Order order = orderRepository.findByOrderNumber(orderNumber)
 
                 .orElseThrow(() -> {
                     log.error("Order not found. orderNumber={}", orderNumber);
+                    Timer.Sample activeTimer = activeTimers.remove(orderNumber);
+                    if (activeTimer != null) {
+                        orderMetrics.recordOrderProcessingDuration(activeTimer);
+                    }
+                    orderMetrics.incrementOrdersFailed("ORDER_NOT_FOUND");
                     return new RuntimeException("Order Not Found: " + orderNumber);
                 });
 
         String postalCode = order.getPostalCode();
+        orderMetrics.incrementOrdersByPostalCode(postalCode);
 
         // -----------------------------------------------------------------
         // CHAOS INJECTION (before external call)
@@ -218,6 +230,11 @@ public class OrderServiceImpl implements OrderService {
             );
         }
 
+        orderMetrics.incrementOrdersSuccessful();
+        Timer.Sample activeTimer = activeTimers.remove(orderNumber);
+        if (activeTimer != null) {
+            orderMetrics.recordOrderProcessingDuration(activeTimer);
+        }
         return order;
     }
 
@@ -260,22 +277,17 @@ public class OrderServiceImpl implements OrderService {
     // Retry fallback (called AFTER all retry attempts are exhausted)
     // ---------------------------------------------------------------------
     private Type retryFallbackMethod(String orderNumber, Exception e) {
+        Timer.Sample activeTimer = activeTimers.remove(orderNumber);
+        if (activeTimer != null) {
+            orderMetrics.recordOrderProcessingDuration(activeTimer);
+        }
 
-//        if (e instanceof BulkheadFullException) {
-//            log.warn("Bulkhead FULL. orderNumber={}", orderNumber);
-//            return new Failure("Service is busy. Please try again later.",
-//                    "BULKHEAD_FULL",
-//                    true);
-//        }
-//
-        // -----------------------------------------------------------------
-        // Circuit Breaker OPEN (fail-fast scenario)
-        // -----------------------------------------------------------------
         if (e instanceof CallNotPermittedException) {
             log.error(
                     "Circuit breaker OPEN for Address Service. orderNumber={}",
                     orderNumber
             );
+            orderMetrics.incrementOrdersFailed("CIRCUIT_OPEN");
             return new Failure(
                     "Address service is unavailable - Circuit breaker is OPEN",
                     "CIRCUIT_OPEN",
@@ -283,9 +295,6 @@ public class OrderServiceImpl implements OrderService {
             );
         }
 
-        // -----------------------------------------------------------------
-        // Retry exhausted (external service instability)
-        // -----------------------------------------------------------------
         log.warn(
                 "Retries exhausted for Address Service. orderNumber={}, reason={}",
                 orderNumber,
@@ -293,6 +302,7 @@ public class OrderServiceImpl implements OrderService {
                 e
         );
 
+        orderMetrics.incrementOrdersFailed("RETRY_EXHAUSTED");
         return new Failure(
                 "Address service failed after retry attempts: " + e.getMessage(),
                 "RETRY_EXHAUSTED",
@@ -313,12 +323,21 @@ public class OrderServiceImpl implements OrderService {
             String orderNumber,
             BulkheadFullException ex
     ) {
+        Timer.Sample activeTimer = activeTimers.remove(orderNumber);
+        if (activeTimer != null) {
+            orderMetrics.recordOrderProcessingDuration(activeTimer);
+        }
         log.warn("BULKHEAD FULL. orderNumber={}", orderNumber);
+        orderMetrics.incrementOrdersFailed("BULKHEAD_FULL");
         return new Failure("Service overloaded", "BULKHEAD_FULL", true);
     }
 
 
     private Type rateLimitFallback(String orderNumber, RequestNotPermitted e) {
+        Timer.Sample activeTimer = activeTimers.remove(orderNumber);
+        if (activeTimer != null) {
+            orderMetrics.recordOrderProcessingDuration(activeTimer);
+        }
         log.error(
                 ">>> RATE LIMITER FALLBACK <<< orderNumber={}, exception={}",
                 orderNumber,
@@ -326,7 +345,7 @@ public class OrderServiceImpl implements OrderService {
                 e
         );
 
-
+        orderMetrics.incrementOrdersFailed("RATE_LIMIT");
         return new Failure(
                 "Too many requests. Please try again later.",
                 "RATE_LIMIT",
